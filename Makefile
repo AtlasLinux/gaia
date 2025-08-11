@@ -2,7 +2,7 @@
 
 all:
 	mkdir -p build
-	gcc src/main.c -o build/init -static
+	clang src/main.c -o build/init -static
 
 clean:
 	rm -fr build
