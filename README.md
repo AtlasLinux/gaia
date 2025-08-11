@@ -1,4 +1,4 @@
-# init
+# gaia
 Init for atlas linux project
 This is Work In Progress (WIP) branch
 ## Setting up developer environment using distrobox
