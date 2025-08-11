@@ -1,4 +1,4 @@
-# init
+# gaia
 Init for atlas linux project
 ## Setting up developer environment using distrobox
 We use musl with clang, we would use alpine for best compatability with musl.
