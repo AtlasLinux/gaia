@@ -1,8 +1,11 @@
 //#include <stdio.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 
 enum { ERR = -1, OK };
 
@@ -38,6 +41,29 @@ int mount_virtual_filesystems(void) {
         }
     }
     return OK;
+}
+
+void create_basic_device_nodes(void) {
+    struct {
+        const char *path;
+        int major;
+        int minor;
+        mode_t mode;
+    } devices[] = {
+        {"/dev/console", 5, 1, 0600},
+        {"/dev/null",    1, 3, 0666},
+        {"/dev/zero",    1, 5, 0666},
+        {"/dev/tty",     5, 0, 0666},
+    };
+
+    struct stat st;
+    // Magic
+    for (int i = 0; i < sizeof(devices)/sizeof(devices[0]); i++) {
+        if (stat(devices[i].path, &st) < 0) {
+            mknod(devices[i].path, S_IFCHR | devices[i].mode,
+                  makedev(devices[i].major, devices[i].minor));
+        }
+    }
 }
 
 int main(void) {
