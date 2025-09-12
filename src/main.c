@@ -13,6 +13,8 @@
 #include <string.h>
 #include <termios.h>
 
+extern char** environ;
+
 static void spawn_shell(const char *tty)
 {
     pid_t pid;
@@ -42,7 +44,7 @@ static void spawn_shell(const char *tty)
             if (fd > STDERR_FILENO)
                 close(fd);
 
-            execl("/bin/sh", "sh", NULL);
+            execl("/bin/hermes", NULL);
             perror("execl");
             _exit(1);
         }
@@ -54,8 +56,10 @@ static void spawn_shell(const char *tty)
     }
 }
 
-int main(void)
-{
+int main(void) {
+    static char* env[] = { "PATH=/bin:/sbin", NULL };
+    environ = env;
+
     // minimal signal handling for PID 1
     signal(SIGCHLD, SIG_DFL);
     signal(SIGHUP, SIG_IGN);
@@ -66,9 +70,12 @@ int main(void)
     // open console for logging init messages
     int cons = open("/dev/console", O_WRONLY);
     if (cons >= 0) {
+        // clear screen
+        dprintf(cons, "\x1b[2J\x1b[H");
         dprintf(cons, "Init starting\n");
         close(cons);
     }
+
 
     // spawn shell on tty1
     spawn_shell("/dev/tty1");
