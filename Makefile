@@ -1,8 +1,33 @@
-.PHONY: all clean
+CC = gcc
+override CFLAGS = -static -O0 -g3 -Isrc -Wall -Wextra -Wpedantic -Wconversion -Wdouble-promotion -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion -Wno-switch
 
-all:
-	mkdir -p build
-	gcc src/main.c -o build/init -static
+BUILD_DIR = build
+SRC_DIR = src
+
+SRC = $(shell find $(SRC_DIR) -name '*.c')
+OBJ = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRC))
+
+TARGET = build/gaia
+
+.PHONY: all clean run crun
+
+all: $(TARGET)
+
+$(TARGET): $(OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
 clean:
-	rm -fr build
+	rm -rf $(BUILD_DIR)
+	rm -f $(TARGET)
+
+run: all
+	@./$(TARGET)
+
+crun: clean run
