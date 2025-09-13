@@ -244,6 +244,90 @@ static void spawn_shell(const char *tty) {
     }
 }
 
+/* call after ensure_dir("/dev",...) */
+static void setup_dev(void)
+{
+    /* ensure /dev exists */
+    ensure_dir("/dev", 0755);
+
+    /* Prefer kernel-managed devtmpfs if available */
+    if (mount("devtmpfs", "/dev", "devtmpfs",
+              MS_NOSUID|MS_NOEXEC|MS_RELATIME, NULL) == 0) {
+        log_console("mounted devtmpfs on /dev\n");
+    } else {
+        log_console("devtmpfs mount failed (%s), falling back to tmpfs\n", strerror(errno));
+        /* fallback to tmpfs */
+        if (mount("tmpfs", "/dev", "tmpfs", MS_NOSUID|MS_STRICTATIME, "mode=0755") < 0) {
+            log_console("mount tmpfs on /dev failed: %s\n", strerror(errno));
+            return;
+        }
+        log_console("mounted tmpfs on /dev\n");
+
+        /* create essential device nodes if they don't exist */
+        struct { const char *path; mode_t mode; dev_t dev; } nodes[] = {
+            {"/dev/console", 0600, makedev(5,1)},
+            {"/dev/null",    0666, makedev(1,3)},
+            {"/dev/zero",    0666, makedev(1,5)},
+            {"/dev/full",    0666, makedev(1,7)},
+            {"/dev/random",  0666, makedev(1,8)},
+            {"/dev/urandom", 0666, makedev(1,9)},
+            {"/dev/tty",     0666, makedev(5,0)},
+            {"/dev/ptmx",    0666, makedev(5,2)},
+            /* a few console ttys for getty/spawn shells */
+            {"/dev/tty0", 0600, makedev(4,0)},
+            {"/dev/tty1", 0620, makedev(4,1)},
+            {"/dev/tty2", 0620, makedev(4,2)},
+            {"/dev/tty3", 0620, makedev(4,3)},
+        };
+        for (size_t i = 0; i < sizeof(nodes)/sizeof(nodes[0]); ++i) {
+            struct stat st;
+            if (stat(nodes[i].path, &st) == 0) continue; /* exists */
+            if (mknod(nodes[i].path, S_IFCHR | nodes[i].mode, nodes[i].dev) < 0) {
+                log_console("mknod %s failed: %s\n", nodes[i].path, strerror(errno));
+            } else {
+                chmod(nodes[i].path, nodes[i].mode);
+            }
+        }
+    }
+
+    /* Ensure devpts is mounted so PTYs work */
+    ensure_dir("/dev/pts", 0755);
+    if (mount("devpts", "/dev/pts", "devpts", 0, "mode=0620,ptmxmode=0666") == 0) {
+        log_console("mounted devpts on /dev/pts\n");
+    } else {
+        log_console("mount devpts failed: %s\n", strerror(errno));
+    }
+
+    /* If /dev/ptmx is missing, create it (char 5,2) */
+    {
+        struct stat st;
+        if (stat("/dev/ptmx", &st) != 0) {
+            if (mknod("/dev/ptmx", S_IFCHR|0666, makedev(5,2)) < 0) {
+                log_console("mknod /dev/ptmx failed: %s\n", strerror(errno));
+            }
+        }
+    }
+
+    /* /dev/shm (POSIX shared memory) */
+    ensure_dir("/dev/shm", 01777);
+    if (mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID|MS_NODEV, "size=64M,mode=1777") == 0) {
+        log_console("mounted tmpfs on /dev/shm\n");
+    } else {
+        log_console("mount /dev/shm failed: %s\n", strerror(errno));
+    }
+
+    /* Helpful symlinks expected by many programs */
+    /* /dev/fd -> /proc/self/fd and std{in,out,err} */
+    unlink("/dev/fd"); /* ignore errors */
+    symlink("/proc/self/fd", "/dev/fd");
+    unlink("/dev/stdin"); unlink("/dev/stdout"); unlink("/dev/stderr");
+    symlink("/proc/self/fd/0", "/dev/stdin");
+    symlink("/proc/self/fd/1", "/dev/stdout");
+    symlink("/proc/self/fd/2", "/dev/stderr");
+
+    log_console("/dev setup complete\n");
+}
+
 int main(void)
 {
     /* basic signals */
@@ -270,22 +354,7 @@ int main(void)
         log_console("mounted /sys\n");
     }
 
-    /* mount /dev as tmpfs and create minimal nodes */
-    if (mount("tmpfs", "/dev", "tmpfs", MS_NOSUID|MS_STRICTATIME, "mode=755") < 0) {
-        log_console("mount /dev tmpfs failed: %s\n", strerror(errno));
-    } else {
-        log_console("mounted /dev (tmpfs)\n");
-    }
-
-    /* create device nodes we care about */
-    if (mknod("/dev/console", S_IFCHR|0600, makedev(5,1)) < 0)
-        log_console("mknod /dev/console: %s\n", strerror(errno));
-    if (mknod("/dev/tty1", S_IFCHR|0620, makedev(4,1)) < 0)
-        log_console("mknod /dev/tty1: %s\n", strerror(errno));
-    if (mknod("/dev/tty2", S_IFCHR|0620, makedev(4,2)) < 0)
-        log_console("mknod /dev/tty2: %s\n", strerror(errno));
-    if (mknod("/dev/tty3", S_IFCHR|0620, makedev(4,3)) < 0)
-        log_console("mknod /dev/tty3: %s\n", strerror(errno));
+    setup_dev();
 
     /* log startup */
     log_console("\033[2J\033[HAtlasLinux init starting...\n");
