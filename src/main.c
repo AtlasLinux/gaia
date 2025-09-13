@@ -229,6 +229,7 @@ static void spawn_shell(const char *tty) {
                 "PATH=/bin:/sbin",
                 "HOME=/root",
                 "TERM=linux",
+                "LD_LIBRARY_PATH=/lib",
                 NULL
             };
 
