@@ -21,21 +21,40 @@
 #include <time.h>
 #include <stdarg.h>
 
-static int logfd = -1;
+static int logfd_console = -1;
+static int logfd_file = -1;
 
-static void log_console(const char *fmt, ...)
-{
-    if (logfd < 0) {
-        logfd = open("/dev/console", O_WRONLY | O_CLOEXEC);
-        /* if still <0 we can't do anything */
+static void log_console(const char *fmt, ...) {
+    // lazy open console
+    if (logfd_console < 0) {
+        logfd_console = open("/dev/console", O_WRONLY | O_CLOEXEC);
     }
-    if (logfd >= 0) {
-        va_list ap;
+
+    // lazy open file log
+    if (logfd_file < 0) {
+        mkdir("/log", 0755); // ensure /log exists
+        logfd_file = open("/log/init.log",
+                          O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+                          0644);
+    }
+
+    va_list ap;
+
+    // write to console
+    if (logfd_console >= 0) {
         va_start(ap, fmt);
-        vdprintf(logfd, fmt, ap);
+        vdprintf(logfd_console, fmt, ap);
+        va_end(ap);
+    }
+
+    // write to log file
+    if (logfd_file >= 0) {
+        va_start(ap, fmt);
+        vdprintf(logfd_file, fmt, ap);
         va_end(ap);
     }
 }
+
 
 /* safe mkdir -p wrapper */
 static int ensure_dir(const char *path, mode_t mode)
