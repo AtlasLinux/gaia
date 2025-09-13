@@ -288,7 +288,7 @@ int main(void)
         log_console("mknod /dev/tty3: %s\n", strerror(errno));
 
     /* log startup */
-    log_console("AtlasLinux init starting...\n");
+    log_console("\033[2J\033[HAtlasLinux init starting...\n");
 
     /* bring up loopback right away */
     configure_lo();
