@@ -275,9 +275,6 @@ static void setup_dev(void) {
     symlink("/proc/self/fd/0","/dev/stdin");
     symlink("/proc/self/fd/1","/dev/stdout");
     symlink("/proc/self/fd/2","/dev/stderr");
-    symlink("/usr/bin","/bin");
-    symlink("/usr/lib","/lib");
-    symlink("/usr/lib64","/lib64");
 
     log_info("/dev setup complete\n");
     log_debug("exit setup_dev()\n");
@@ -315,6 +312,10 @@ int main(void) {
     else log_info("mounted /var/run\n");
 
     ensure_dir("/var/cache",0755);
+
+    symlink("/usr/bin","/bin");
+    symlink("/usr/lib","/lib");
+    symlink("/usr/lib64","/lib64");
 
     log_info("AtlasLinux init starting...\n");
 
