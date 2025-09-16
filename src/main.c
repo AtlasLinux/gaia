@@ -276,6 +276,8 @@ static void setup_dev(void) {
     symlink("/proc/self/fd/1","/dev/stdout");
     symlink("/proc/self/fd/2","/dev/stderr");
     symlink("/usr/bin","/bin");
+    symlink("/usr/lib","/lib");
+    symlink("/usr/lib64","/lib64");
 
     log_info("/dev setup complete\n");
     log_debug("exit setup_dev()\n");
