@@ -20,6 +20,8 @@
 #include <dirent.h>
 #include <time.h>
 #include <stdarg.h>
+#include <linux/fb.h>
+#include <sys/mman.h>
 
 #include "log.c"
 
@@ -280,6 +282,52 @@ static void setup_dev(void) {
     log_debug("exit setup_dev()\n");
 }
 
+static int setup_framebuffer(void) {
+    log_debug("enter setup_framebuffer()\n");
+
+    int fb = open("/dev/fb0", O_RDWR);
+    if (fb < 0) {
+        log_warn("cannot open /dev/fb0: %s\n", strerror(errno));
+        return -1;
+    }
+
+    struct fb_var_screeninfo vinfo;
+    struct fb_fix_screeninfo finfo;
+
+    if (ioctl(fb, FBIOGET_FSCREENINFO, &finfo) < 0) {
+        log_warn("FBIOGET_FSCREENINFO failed: %s\n", strerror(errno));
+        close(fb);
+        return -1;
+    }
+
+    if (ioctl(fb, FBIOGET_VSCREENINFO, &vinfo) < 0) {
+        log_warn("FBIOGET_VSCREENINFO failed: %s\n", strerror(errno));
+        close(fb);
+        return -1;
+    }
+
+    log_info("Framebuffer: %dx%d, %dbpp, line_length=%d\n",
+        vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, finfo.line_length);
+
+    size_t screensize = finfo.smem_len;
+    void *fbp = mmap(NULL, screensize, PROT_READ | PROT_WRITE, MAP_SHARED, fb, 0);
+    if (fbp == MAP_FAILED) {
+        log_warn("mmap framebuffer failed: %s\n", strerror(errno));
+        close(fb);
+        return -1;
+    }
+
+    // clear the screen
+    memset(fbp, 0, screensize);
+    log_info("framebuffer cleared\n");
+
+    // re-map if we need to draw later
+    munmap(fbp, screensize);
+
+    log_debug("exit setup_framebuffer()\n");
+    return 0;
+}
+
 /* main init */
 int main(void) {
     loglevel = 0;
@@ -299,6 +347,7 @@ int main(void) {
     else log_info("mounted /sys\n");
 
     setup_dev();
+    setup_framebuffer();
 
     ensure_dir("/tmp",01777); chmod("/tmp",01777);
     ensure_dir("/var/tmp",01777); chmod("/var/tmp",01777);
