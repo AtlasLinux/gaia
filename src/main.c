@@ -23,7 +23,7 @@
 #include <linux/fb.h>
 #include <sys/mman.h>
 
-#include "log.c"
+#include "log.h"
 
 /* safe mkdir -p wrapper */
 static int ensure_dir(const char *path, mode_t mode) {

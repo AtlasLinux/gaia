@@ -1,23 +1,26 @@
-CC = gcc
-CFLAGS = -static -O0 -g3 -Isrc -Wall -Wextra -Wpedantic -Wconversion -Wdouble-promotion -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion -Wno-switch
+CC := gcc
 
-BUILD_DIR = build
-SRC_DIR = src
+CFLAGS := -O0 -g3 -Isrc -Wall -Wextra -Wpedantic \
+          -Wconversion -Wdouble-promotion \
+          -Wno-unused-parameter -Wno-unused-function \
+          -Wno-sign-conversion -Wno-switch
 
-SRC = $(shell find $(SRC_DIR) -name '*.c')
-OBJ = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRC))
+# Linker flags (options)
+LDFLAGS := -static -L../../usr/lib/liblog/build
+# Libraries must come AFTER the objects
+LDLIBS := -llog
 
-TARGET = build/init
-
-.PHONY: all clean run crun
+BUILD_DIR := build
+SRC := src/main.c
+OBJ := $(BUILD_DIR)/main.o
+TARGET := $(BUILD_DIR)/init
 
 all: $(TARGET)
 
-$(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+$(TARGET): $(OBJ) | $(BUILD_DIR)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
+$(OBJ): src/main.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR):
@@ -25,9 +28,5 @@ $(BUILD_DIR):
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(TARGET)
 
-run: all
-	@./$(TARGET)
-
-crun: clean run
+.PHONY: all clean
