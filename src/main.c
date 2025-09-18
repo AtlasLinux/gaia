@@ -79,125 +79,6 @@ static int ensure_dir(const char *path, mode_t mode) {
     return -1;
 }
 
-/* bring up loopback */
-static int configure_lo(void) {
-    log_debug("enter configure_lo()\n");
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) { log_error("socket failed: %s\n", strerror(errno)); return -1; }
-    log_debug("socket fd=%d\n", fd);
-
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, "lo", IFNAMSIZ-1);
-
-    if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0)
-        log_warn("SIOCGIFFLAGS failed: %s\n", strerror(errno));
-    else
-        log_debug("retrieved lo flags=%x\n", ifr.ifr_flags);
-
-    ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
-    if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0)
-        log_warn("SIOCSIFFLAGS failed: %s\n", strerror(errno));
-    else
-        log_debug("lo is UP\n");
-
-    struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-    addr->sin_family = AF_INET;
-    inet_pton(AF_INET, "127.0.0.1", &addr->sin_addr);
-    if (ioctl(fd, SIOCSIFADDR, &ifr) < 0)
-        log_warn("SIOCSIFADDR failed: %s\n", strerror(errno));
-    else
-        log_debug("assigned 127.0.0.1 to lo\n");
-
-    close(fd);
-    log_debug("exit configure_lo => 0\n");
-    return 0;
-}
-
-/* assign IP to interface */
-static int set_ip_on_iface(const char *ifname, const char *ip) {
-    log_debug("enter set_ip_on_iface(ifname='%s', ip='%s')\n", ifname, ip);
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) { log_error("socket failed: %s\n", strerror(errno)); return -1; }
-    log_debug("socket fd=%d\n", fd);
-
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ-1);
-
-    struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-    addr->sin_family = AF_INET;
-    inet_pton(AF_INET, ip, &addr->sin_addr);
-    if (ioctl(fd, SIOCSIFADDR, &ifr) < 0) {
-        log_error("SIOCSIFADDR(%s,%s) failed: %s\n", ifname, ip, strerror(errno));
-        close(fd); return -1;
-    }
-    log_debug("assigned IP %s to %s\n", ip, ifname);
-
-    if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) { log_error("SIOCGIFFLAGS failed: %s\n", strerror(errno)); close(fd); return -1; }
-    ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
-    if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0)
-        log_warn("SIOCSIFFLAGS failed for %s: %s\n", ifname, strerror(errno));
-    else log_debug("%s is UP\n", ifname);
-
-    close(fd);
-    log_debug("exit set_ip_on_iface => 0\n");
-    return 0;
-}
-
-/* add default route */
-static int add_default_route(const char *gw, const char *dev) {
-    log_debug("enter add_default_route(gw='%s', dev='%s')\n", gw, dev);
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) { log_error("socket failed: %s\n", strerror(errno)); return -1; }
-    log_debug("socket fd=%d\n", fd);
-
-    struct rtentry route;
-    memset(&route, 0, sizeof(route));
-    struct sockaddr_in *addr;
-
-    addr = (struct sockaddr_in *)&route.rt_dst;
-    addr->sin_family = AF_INET; addr->sin_addr.s_addr = INADDR_ANY;
-    addr = (struct sockaddr_in *)&route.rt_gateway;
-    addr->sin_family = AF_INET; inet_pton(AF_INET, gw, &addr->sin_addr);
-    addr = (struct sockaddr_in *)&route.rt_genmask;
-    addr->sin_family = AF_INET; addr->sin_addr.s_addr = INADDR_ANY;
-
-    route.rt_flags = RTF_UP | RTF_GATEWAY;
-    route.rt_dev = (char *)dev;
-
-    if (ioctl(fd, SIOCADDRT, &route) < 0)
-        log_error("SIOCADDRT(%s) failed: %s\n", gw, strerror(errno));
-    else
-        log_info("added default route via %s on %s\n", gw, dev);
-
-    close(fd);
-    log_debug("exit add_default_route => 0\n");
-    return 0;
-}
-
-/* pick first non-loopback iface */
-static int choose_net_iface(char *buf, size_t bufsz) {
-    log_debug("enter choose_net_iface(bufsz=%zu)\n", bufsz);
-    DIR *d = opendir("/sys/class/net");
-    if (!d) { log_error("opendir /sys/class/net failed: %s\n", strerror(errno)); return -1; }
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (e->d_name[0] == '.') continue;
-        if (strcmp(e->d_name, "lo") == 0) continue;
-        strncpy(buf, e->d_name, bufsz-1);
-        buf[bufsz-1] = '\0';
-        log_info("choose_net_iface: picked %s\n", buf);
-        closedir(d);
-        log_debug("exit choose_net_iface => 0\n");
-        return 0;
-    }
-    closedir(d);
-    log_warn("no non-loopback interface found\n");
-    log_debug("exit choose_net_iface => -1\n");
-    return -1;
-}
-
 /* spawn shell */
 static void spawn_shell(const char *tty) {
     log_info("spawn_shell: starting shell on %s\n", tty);
@@ -328,9 +209,30 @@ static int setup_framebuffer(void) {
     return 0;
 }
 
+/* helper: check if file is executable */
+static int is_executable(const char *path) {
+    struct stat st;
+    if (stat(path, &st) < 0) return 0;
+    if (!S_ISREG(st.st_mode)) return 0;
+    if (st.st_mode & S_IXUSR) return 1;  // owner executable
+    return 0;
+}
+
+/* launch all executables in /sbin/services */
+static void launch_services(void) {
+    char *services[] = {"/sbin/services/net", NULL};
+    for(int i=0; services[i]; i++){
+        pid_t pid = fork();
+        if(pid == 0){
+            execl(services[i], services[i], NULL);
+            _exit(1);
+        }
+    }
+}
+
 /* main init */
 int main(void) {
-    loglevel = 0;
+    log_init("/log/init.log", 0);
     log_debug("enter main()\n");
 
     signal(SIGCHLD,SIG_IGN);
@@ -368,29 +270,7 @@ int main(void) {
 
     log_info("AtlasLinux init starting...\n");
 
-    configure_lo();
-
-    char ifname[IFNAMSIZ]={0}; int max_wait=10, waited=0;
-    while(waited<max_wait){
-        if(choose_net_iface(ifname,sizeof(ifname))==0){ log_info("found interface: %s\n",ifname); break; }
-        sleep(1); waited++;
-        log_debug("waiting for non-loopback iface... %d/%d\n",waited,max_wait);
-    }
-
-    if(ifname[0]){
-        if(set_ip_on_iface(ifname,"10.0.2.15")==0){
-            log_info("set IP on %s\n",ifname);
-            add_default_route("10.0.2.2",ifname);
-        } else log_warn("failed to set IP on %s\n",ifname);
-    } else log_warn("no non-loopback interface appeared within %d seconds\n", max_wait);
-
-    int rfd = open("/etc/resolv.conf",O_WRONLY|O_CREAT|O_TRUNC,0644);
-    if(rfd>=0){
-        const char *dns="nameserver 8.8.8.8\n";
-        write(rfd,dns,strlen(dns));
-        close(rfd);
-        log_debug("/etc/resolv.conf written\n");
-    } else log_warn("could not open /etc/resolv.conf: %s\n", strerror(errno));
+    launch_services();
 
     if(fork()==0) spawn_shell("/dev/tty1");
     if(fork()==0) spawn_shell("/dev/tty2");
