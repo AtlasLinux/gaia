@@ -218,16 +218,50 @@ static int is_executable(const char *path) {
     return 0;
 }
 
-/* launch all executables in /sbin/services */
 static void launch_services(void) {
-    char *services[] = {"/sbin/services/net", NULL};
-    for(int i=0; services[i]; i++){
+    const char *dir = "/sbin/services";
+    DIR *d = opendir(dir);
+    if (!d) {
+        perror("opendir");
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        // skip "." and ".."
+        if (entry->d_name[0] == '.')
+            continue;
+
+        // build full path
+        char path[PATH_MAX];
+        int n = snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        if (n < 0 || n >= (int)sizeof(path)) {
+            fprintf(stderr, "Path too long: %s/%s\n", dir, entry->d_name);
+            continue;
+        }
+
+        // check if it's a regular executable file
+        struct stat st;
+        if (stat(path, &st) < 0) {
+            perror("stat");
+            continue;
+        }
+        if (!S_ISREG(st.st_mode) || !(st.st_mode & S_IXUSR))
+            continue;
+
+        // fork and exec
         pid_t pid = fork();
-        if(pid == 0){
-            execl(services[i], services[i], NULL);
+        if (pid < 0) {
+            perror("fork");
+        } else if (pid == 0) {
+            execl(path, path, NULL);
+            perror("execl");
             _exit(1);
         }
+        // parent continues
     }
+
+    closedir(d);
 }
 
 /* main init */
