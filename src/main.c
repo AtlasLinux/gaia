@@ -90,14 +90,14 @@ static void spawn_shell(const char *tty) {
             log_debug("child process %d starting shell on %s\n", getpid(), tty);
             setsid();
             int fd = open(tty, O_RDWR);
-            if (fd < 0) { perror("open tty"); _exit(1); }
+            if (fd < 0) { log_perror("open tty"); _exit(1); }
             ioctl(fd, TIOCSCTTY, 0);
             dup2(fd, STDIN_FILENO); dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO);
             if (fd > STDERR_FILENO) close(fd);
             char *envp[] = {"PATH=/bin:/sbin","HOME=/root","TERM=linux","LD_LIBRARY_PATH=/lib",NULL};
             char *argv[] = {"/bin/hermes", NULL};
             execve(argv[0], argv, envp);
-            perror("execve"); _exit(1);
+            log_perror("execve"); _exit(1);
         }
         log_debug("parent: spawned child %d for %s\n", pid, tty);
         int status; waitpid(pid, &status, 0);
@@ -222,7 +222,7 @@ static void launch_services(void) {
     const char *dir = "/sbin/services";
     DIR *d = opendir(dir);
     if (!d) {
-        perror("opendir");
+        log_perror("opendir");
         return;
     }
 
@@ -243,7 +243,7 @@ static void launch_services(void) {
         // check if it's a regular executable file
         struct stat st;
         if (stat(path, &st) < 0) {
-            perror("stat");
+            log_perror("stat");
             continue;
         }
         if (!S_ISREG(st.st_mode) || !(st.st_mode & S_IXUSR))
@@ -252,16 +252,59 @@ static void launch_services(void) {
         // fork and exec
         pid_t pid = fork();
         if (pid < 0) {
-            perror("fork");
+            log_perror("fork");
         } else if (pid == 0) {
             execl(path, path, NULL);
-            perror("execl");
+            log_perror("execl");
             _exit(1);
         }
         // parent continues
     }
 
     closedir(d);
+}
+
+void load_module(const char* module) {
+    if (fork() == 0) execv("/sbin/insmod", (char*[]){ "insmod", module, NULL });
+}
+
+void detect_and_load_net_drivers(void) {
+    DIR *netdir = opendir("/sys/class/net");
+    if (!netdir) {
+        log_perror("opendir /sys/class/net");
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(netdir)) != NULL) {
+        if (entry->d_name[0] == '.') continue; // skip . and ..
+
+        char uevent_path[512];
+        snprintf(uevent_path, sizeof(uevent_path),
+                 "/sys/class/net/%s/device/uevent", entry->d_name);
+
+        FILE *f = fopen(uevent_path, "r");
+        if (!f) continue; // device may have no driver
+
+        char line[256];
+        char *driver = NULL;
+        while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "DRIVER=", 7) == 0) {
+                // copy driver name, strip newline
+                line[strcspn(line, "\n")] = 0;
+                driver = line + 7;
+                break;
+            }
+        }
+        fclose(f);
+
+        if (driver) {
+            log_info("Loading %s driver for net device %s", driver, entry->d_name);
+            load_module(driver);
+        }
+    }
+
+    closedir(netdir);
 }
 
 /* main init */
@@ -304,6 +347,7 @@ int main(void) {
 
     log_info("AtlasLinux init starting...\n");
 
+    detect_and_load_net_drivers();
     launch_services();
 
     if(fork()==0) spawn_shell("/dev/tty1");
