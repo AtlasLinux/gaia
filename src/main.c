@@ -6,7 +6,6 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/sysmacros.h>
-#include <sys/utsname.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -23,10 +22,9 @@
 #include <stdarg.h>
 #include <linux/fb.h>
 #include <sys/mman.h>
-#include <ctype.h>
-#include <fnmatch.h>
 
 #include "log.h"
+#include "insmod.c"
 
 /* safe mkdir -p wrapper */
 static int ensure_dir(const char *path, mode_t mode) {
@@ -93,14 +91,14 @@ static void spawn_shell(const char *tty) {
             log_debug("child process %d starting shell on %s\n", getpid(), tty);
             setsid();
             int fd = open(tty, O_RDWR);
-            if (fd < 0) { log_perror("open tty"); _exit(1); }
+            if (fd < 0) { perror("open tty"); _exit(1); }
             ioctl(fd, TIOCSCTTY, 0);
             dup2(fd, STDIN_FILENO); dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO);
             if (fd > STDERR_FILENO) close(fd);
             char *envp[] = {"PATH=/bin:/sbin","HOME=/root","TERM=linux","LD_LIBRARY_PATH=/lib",NULL};
             char *argv[] = {"/bin/hermes", NULL};
             execve(argv[0], argv, envp);
-            log_perror("execve"); _exit(1);
+            perror("execve"); _exit(1);
         }
         log_debug("parent: spawned child %d for %s\n", pid, tty);
         int status; waitpid(pid, &status, 0);
@@ -225,7 +223,7 @@ static void launch_services(void) {
     const char *dir = "/sbin/services";
     DIR *d = opendir(dir);
     if (!d) {
-        log_perror("opendir");
+        perror("opendir");
         return;
     }
 
@@ -246,7 +244,7 @@ static void launch_services(void) {
         // check if it's a regular executable file
         struct stat st;
         if (stat(path, &st) < 0) {
-            log_perror("stat");
+            perror("stat");
             continue;
         }
         if (!S_ISREG(st.st_mode) || !(st.st_mode & S_IXUSR))
@@ -255,10 +253,10 @@ static void launch_services(void) {
         // fork and exec
         pid_t pid = fork();
         if (pid < 0) {
-            log_perror("fork");
+            perror("fork");
         } else if (pid == 0) {
             execl(path, path, NULL);
-            log_perror("execl");
+            perror("execl");
             _exit(1);
         }
         // parent continues
@@ -267,208 +265,10 @@ static void launch_services(void) {
     closedir(d);
 }
 
-void load_module(const char* module) {
-    if (fork() == 0) execv("/sbin/insmod", (char*[]){ "insmod", module, NULL });
-}
-
-/* helper: check if /sys/module/<modname> exists */
-static int module_is_loaded(const char *modname)
-{
-    char path[256];
-    int n = snprintf(path, sizeof(path), "/sys/module/%s", modname);
-    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
-    struct stat st;
-    return (stat(path, &st) == 0);
-}
-
-/* wait up to 'secs' seconds for /sys/module/<modname> to appear */
-static int wait_for_module_load(const char *modname, int secs)
-{
-    for (int i = 0; i < secs * 5; ++i) { /* 200ms * 5 = 1s; secs*5 loops */
-        if (module_is_loaded(modname)) return 0;
-        usleep(200000);
+void load_modules(const char* modules[]) {
+    for (int i = 0; modules[i] != NULL; i++) {
+        insmod(modules[i]);
     }
-    return -1;
-}
-
-/* read modules.alias for current kernel release under /usr/lib/modules */
-static char *find_modules_alias(void)
-{
-    struct utsname u;
-    if (uname(&u) != 0) return NULL;
-
-    char *path = malloc(PATH_MAX);
-    if (!path) return NULL;
-
-    int n = snprintf(path, PATH_MAX, "/usr/lib/modules/%s/modules.alias", u.release);
-    if (n < 0 || (size_t)n >= PATH_MAX) { free(path); return NULL; }
-    if (access(path, R_OK) == 0) return path;
-
-    /* fallback: check /lib/modules/<release>/modules.alias */
-    n = snprintf(path, PATH_MAX, "/lib/modules/%s/modules.alias", u.release);
-    if (n < 0 || (size_t)n >= PATH_MAX) { free(path); return NULL; }
-    if (access(path, R_OK) == 0) return path;
-
-    free(path);
-    return NULL;
-}
-
-void detect_and_load_net_drivers(void)
-{
-    char *alias_path = find_modules_alias();
-    if (!alias_path) {
-        log_warn("modules.alias not found in /usr/lib/modules/$(uname -r) or /lib/modules/$(uname -r)\n");
-        return;
-    }
-    log_info("using modules.alias: %s\n", alias_path);
-
-    /* read modules.alias into memory (array of pattern/module pairs) */
-    FILE *af = fopen(alias_path, "r");
-    if (!af) {
-        log_warn("fopen(%s) failed: %s\n", alias_path, strerror(errno));
-        free(alias_path);
-        return;
-    }
-
-    size_t cap = 256, cnt = 0;
-    struct { char *pattern; char *mod; } *aliases = calloc(cap, sizeof(*aliases));
-    if (!aliases) { fclose(af); free(alias_path); return; }
-
-    char *line = NULL;
-    size_t llen = 0;
-    while (getline(&line, &llen, af) != -1) {
-        /* skip comments/blank */
-        char *p = line;
-        while (isspace((unsigned char)*p)) ++p;
-        if (*p == '\0' || *p == '#') continue;
-
-        /* split on whitespace: pattern then module */
-        char *pat = p;
-        while (*p && !isspace((unsigned char)*p)) ++p;
-        if (!*p) continue;
-        *p++ = '\0';
-        while (isspace((unsigned char)*p)) ++p;
-        if (!*p) continue;
-        char *mod = p;
-        /* trim end newline/space */
-        char *end = mod + strlen(mod);
-        while (end > mod && isspace((unsigned char)end[-1])) { end[-1] = '\0'; --end; }
-
-        if (cnt >= cap) {
-            size_t ncap = cap * 2;
-            void *tmp = realloc(aliases, ncap * sizeof(*aliases));
-            if (!tmp) break;
-            aliases = tmp;
-            cap = ncap;
-        }
-        aliases[cnt].pattern = strdup(pat);
-        aliases[cnt].mod = strdup(mod);
-        if (!aliases[cnt].pattern || !aliases[cnt].mod) {
-            free(aliases[cnt].pattern);
-            free(aliases[cnt].mod);
-            break;
-        }
-        ++cnt;
-    }
-    free(line);
-    fclose(af);
-    free(alias_path);
-
-    /* iterate PCI devices and match network-class devices */
-    DIR *pcidir = opendir("/sys/bus/pci/devices");
-    if (!pcidir) {
-        log_warn("cannot open /sys/bus/pci/devices: %s\n", strerror(errno));
-        goto cleanup;
-    }
-
-    /* small dynamic list of requested modules to avoid duplicates */
-    char **requested = NULL;
-    size_t rq_cnt = 0, rq_cap = 0;
-
-    struct dirent *d;
-    while ((d = readdir(pcidir)) != NULL) {
-        if (d->d_name[0] == '.') continue;
-
-        char classpath[PATH_MAX];
-        snprintf(classpath, sizeof(classpath), "/sys/bus/pci/devices/%s/class", d->d_name);
-        FILE *cf = fopen(classpath, "r");
-        if (!cf) continue;
-        char classbuf[64];
-        if (!fgets(classbuf, sizeof(classbuf), cf)) { fclose(cf); continue; }
-        fclose(cf);
-
-        unsigned long classv = 0;
-        if (sscanf(classbuf, "%lx", &classv) != 1) continue;
-        unsigned class_code = (classv >> 16) & 0xff;
-        if (class_code != 0x02) continue; /* not network class */
-
-        /* read modalias */
-        char modalias_path[PATH_MAX];
-        snprintf(modalias_path, sizeof(modalias_path), "/sys/bus/pci/devices/%s/modalias", d->d_name);
-        FILE *mf = fopen(modalias_path, "r");
-        if (!mf) continue;
-        char modalias[512];
-        if (!fgets(modalias, sizeof(modalias), mf)) { fclose(mf); continue; }
-        fclose(mf);
-        modalias[strcspn(modalias, "\n")] = '\0';
-        log_debug("pci device %s modalias=%s\n", d->d_name, modalias);
-
-        /* find first matching alias using fnmatch for proper wildcard semantics */
-        const char *sel_mod = NULL;
-        for (size_t i = 0; i < cnt; ++i) {
-            if (fnmatch(aliases[i].pattern, modalias, 0) == 0) {
-                sel_mod = aliases[i].mod;
-                break;
-            }
-        }
-        if (!sel_mod) {
-            log_info("no modules.alias match for device %s (modalias=%s)\n", d->d_name, modalias);
-            continue;
-        }
-
-        /* skip if already loaded */
-        if (module_is_loaded(sel_mod)) {
-            log_info("module %s already loaded, skipping\n", sel_mod);
-            continue;
-        }
-
-        /* skip if requested already */
-        int dup = 0;
-        for (size_t i = 0; i < rq_cnt; ++i) if (strcmp(requested[i], sel_mod) == 0) { dup = 1; break; }
-        if (dup) { log_debug("module %s already requested, skipping\n", sel_mod); continue; }
-
-        /* record request */
-        if (rq_cnt + 1 > rq_cap) {
-            size_t ncap = rq_cap ? rq_cap * 2 : 8;
-            char **tmp = realloc(requested, ncap * sizeof(char*));
-            if (!tmp) { log_warn("alloc failed for requested list\n"); continue; }
-            requested = tmp; rq_cap = ncap;
-        }
-        requested[rq_cnt++] = strdup(sel_mod);
-
-        /* ask loader to load module by name and wait briefly */
-        log_info("requesting load of module '%s' for device %s\n", sel_mod, d->d_name);
-        load_module(sel_mod);
-
-        if (wait_for_module_load(sel_mod, 3) == 0) {
-            log_info("module %s appeared in /sys/module\n", sel_mod);
-        } else {
-            log_warn("module %s did not appear in /sys/module within timeout; check dmesg\n", sel_mod);
-        }
-    }
-
-    closedir(pcidir);
-
-    /* free requested */
-    for (size_t i = 0; i < rq_cnt; ++i) free(requested[i]);
-    free(requested);
-
-cleanup:
-    for (size_t i = 0; i < cnt; ++i) {
-        free(aliases[i].pattern);
-        free(aliases[i].mod);
-    }
-    free(aliases);
 }
 
 /* main init */
@@ -511,7 +311,7 @@ int main(void) {
 
     log_info("AtlasLinux init starting...\n");
 
-    detect_and_load_net_drivers();
+    load_modules((const char*[]){ "e1000", NULL });
     launch_services();
 
     if(fork()==0) spawn_shell("/dev/tty1");
