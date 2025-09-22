@@ -312,7 +312,7 @@ int main(void) {
 
     log_info("AtlasLinux init starting...\n");
 
-    load_modules((const char*[]){ "e1000", NULL });
+    load_modules((const char*[]){ "e1000", "virtio_dma_buf", "virtio-gpu", NULL });
     launch_services();
 
     if(fork()==0) spawn_shell("/dev/tty1");
