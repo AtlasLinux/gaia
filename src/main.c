@@ -308,6 +308,7 @@ int main(void) {
     symlink("/usr/bin","/bin");
     symlink("/usr/lib","/lib");
     symlink("/usr/lib64","/lib64");
+    symlink("/var/run", "/run");
 
     log_info("AtlasLinux init starting...\n");
 
