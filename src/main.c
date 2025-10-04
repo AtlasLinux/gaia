@@ -273,7 +273,11 @@ void load_modules(const char* modules[]) {
 
 /* main init */
 int main(void) {
-    log_init("/log/init.log", 0);
+    logger = logger_create(LOG_INFO);
+    LogSink* console_sink = console_sink_create();
+    logger_add_sink(logger, console_sink);
+    LogSink* file_sink = file_sink_create("/log/init.log");
+    logger_add_sink(logger, file_sink);
     log_debug("enter main()\n");
 
     signal(SIGCHLD,SIG_IGN);
