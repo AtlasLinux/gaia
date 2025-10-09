@@ -96,7 +96,7 @@ static void spawn_shell(const char *tty) {
             dup2(fd, STDIN_FILENO); dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO);
             if (fd > STDERR_FILENO) close(fd);
             char *envp[] = {"PATH=/bin:/sbin","HOME=/root","TERM=linux","LD_LIBRARY_PATH=/lib",NULL};
-            char *argv[] = {"/bin/hermes", NULL};
+            char *argv[] = {"/sbin/login", NULL};
             execve(argv[0], argv, envp);
             perror("execve"); _exit(1);
         }
