@@ -6,9 +6,9 @@ CFLAGS := -O0 -g3 -Isrc -Wall -Wextra -Wpedantic \
           -Wno-sign-conversion -Wno-switch
 
 # Linker flags (options)
-LDFLAGS := -static -L../../usr/lib/liblog/build
+LDFLAGS := -static -L../../usr/lib/liblog/build -L../../usr/lib/libacl/build
 # Libraries must come AFTER the objects
-LDLIBS := -llog
+LDLIBS := -llog -lacl
 
 BUILD_DIR := build
 SRC := src/main.c

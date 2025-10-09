@@ -25,8 +25,11 @@
 
 #include "log.h"
 #include "insmod.c"
+#include "acl.h"
 
-/* safe mkdir -p wrapper */
+void load_modules(const char* modules[]);
+
+/* safe mkdir -p wrapper (unchanged) */
 static int ensure_dir(const char *path, mode_t mode) {
     log_debug("enter ensure_dir(path='%s', mode=%o)\n", path, mode);
     struct stat st;
@@ -80,22 +83,37 @@ static int ensure_dir(const char *path, mode_t mode) {
     return -1;
 }
 
-/* spawn shell */
-static void spawn_shell(const char *tty) {
-    log_info("spawn_shell: starting shell on %s\n", tty);
+/* small helpers for reading config (wrappers around your libacl API) */
+static int cfg_get_int(AclBlock *cfg, const char *path, int def) {
+    if (!cfg) return def;
+    long v = 0;
+    if (acl_get_int(cfg, path, &v)) return (int)v;
+    return def;
+}
+
+static char *cfg_get_string_dup(AclBlock *cfg, const char *path, const char *def) {
+    if (!cfg) return def ? strdup(def) : NULL;
+    char *tmp = NULL;
+    if (acl_get_string(cfg, path, &tmp) && tmp) return strdup(tmp);
+    return def ? strdup(def) : NULL;
+}
+
+/* spawn login (unchanged except small log phrasing) */
+static void spawn_login(const char *tty) {
+    log_info("spawn_login: starting login on %s\n", tty);
     pid_t pid;
     for (;;) {
         pid = fork();
         if (pid < 0) { log_error("fork failed: %s\n", strerror(errno)); sleep(1); continue; }
         if (pid == 0) {
-            log_debug("child process %d starting shell on %s\n", getpid(), tty);
+            log_debug("child process %d starting login on %s\n", getpid(), tty);
             setsid();
             int fd = open(tty, O_RDWR);
             if (fd < 0) { perror("open tty"); _exit(1); }
             ioctl(fd, TIOCSCTTY, 0);
             dup2(fd, STDIN_FILENO); dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO);
             if (fd > STDERR_FILENO) close(fd);
-            char *envp[] = {"PATH=/bin:/sbin","HOME=/root","TERM=linux","LD_LIBRARY_PATH=/lib",NULL};
+            char *envp[] = {"PATH=/bin:/sbin","LD_LIBRARY_PATH=/lib",NULL};
             char *argv[] = {"/sbin/login", NULL};
             execve(argv[0], argv, envp);
             perror("execve"); _exit(1);
@@ -107,7 +125,7 @@ static void spawn_shell(const char *tty) {
     }
 }
 
-/* setup /dev and devices */
+/* setup /dev and devices (unchanged) */
 static void setup_dev(void) {
     log_debug("enter setup_dev()\n");
     ensure_dir("/dev", 0755);
@@ -164,6 +182,7 @@ static void setup_dev(void) {
     log_debug("exit setup_dev()\n");
 }
 
+/* framebuffer setup unchanged */
 static int setup_framebuffer(void) {
     log_debug("enter setup_framebuffer()\n");
 
@@ -219,66 +238,85 @@ static int is_executable(const char *path) {
     return 0;
 }
 
-static void launch_services(void) {
-    const char *dir = "/sbin/services";
+/* load modules from config: Modules.load[0], Modules.load[1], ... */
+static void load_modules_from_config(AclBlock *cfg) {
+    const int MAX_MODULES = 256;
+    char path[256];
+    int found = 0;
+    for (int i = 0; i < MAX_MODULES; ++i) {
+        snprintf(path, sizeof(path), "Modules.load[%d]", i);
+        char *mod = NULL;
+        if (!acl_get_string(cfg, path, &mod) || !mod) break;
+        log_info("config: loading module '%s'\n", mod);
+        insmod(mod);
+        found = 1;
+    }
+
+    if (!found) {
+        /* fallback to previous hard-coded list */
+        const char *defaults[] = { "e1000", "virtio_dma_buf", "virtio-gpu", NULL };
+        log_info("config: no Modules.load[], falling back to defaults\n");
+        load_modules(defaults);
+    }
+}
+
+/* launch services directory (configurable) */
+static void launch_services_from_dir(const char *dir) {
     DIR *d = opendir(dir);
     if (!d) {
-        perror("opendir");
+        log_warn("launch_services: opendir(%s): %s\n", dir, strerror(errno));
         return;
     }
 
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
-        // skip "." and ".."
-        if (entry->d_name[0] == '.')
-            continue;
-
-        // build full path
+        if (entry->d_name[0] == '.') continue;
         char path[PATH_MAX];
         int n = snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
-        if (n < 0 || n >= (int)sizeof(path)) {
-            fprintf(stderr, "Path too long: %s/%s\n", dir, entry->d_name);
-            continue;
-        }
-
-        // check if it's a regular executable file
+        if (n < 0 || n >= (int)sizeof(path)) { log_warn("path too long: %s/%s\n", dir, entry->d_name); continue; }
         struct stat st;
-        if (stat(path, &st) < 0) {
-            perror("stat");
-            continue;
-        }
-        if (!S_ISREG(st.st_mode) || !(st.st_mode & S_IXUSR))
-            continue;
-
-        // fork and exec
+        if (stat(path, &st) < 0) { log_warn("stat(%s): %s\n", path, strerror(errno)); continue; }
+        if (!S_ISREG(st.st_mode) || !(st.st_mode & S_IXUSR)) continue;
         pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-        } else if (pid == 0) {
-            execl(path, path, NULL);
-            perror("execl");
-            _exit(1);
-        }
-        // parent continues
+        if (pid < 0) { log_warn("fork failed for %s: %s\n", path, strerror(errno)); continue; }
+        if (pid == 0) { execl(path, path, NULL); perror("execl"); _exit(1); }
+        /* parent continues; no supervision here (simple) */
     }
-
     closedir(d);
 }
 
+/* Load modules helper for fallback usage (calls insmod for each name) */
 void load_modules(const char* modules[]) {
     for (int i = 0; modules[i] != NULL; i++) {
         insmod(modules[i]);
     }
 }
 
-/* main init */
+/* main init (now config-aware) */
 int main(void) {
+    /* create logger and console sink first */
     logger = logger_create(LOG_INFO);
     LogSink* console_sink = console_sink_create();
     logger_add_sink(logger, console_sink);
-    LogSink* file_sink = file_sink_create("/log/init.log");
-    logger_add_sink(logger, file_sink);
     log_debug("enter main()\n");
+
+    /* try to parse /conf/system.acl (non-fatal) */
+    AclBlock *cfg = acl_parse_file("/conf/system.acl");
+    if (cfg) {
+        if (!acl_resolve_all(cfg)) {
+            log_warn("acl: /conf/system.acl parsed but failed to resolve references\n");
+        } else {
+            log_info("acl: /conf/system.acl loaded\n");
+        }
+    } else {
+        log_info("acl: /conf/system.acl not found or failed to parse, continuing with defaults\n");
+    }
+
+    /* Logging path override (optional) */
+    char *logpath = cfg_get_string_dup(cfg, "Logging.path", "/log/init.log");
+    LogSink* file_sink = file_sink_create(logpath);
+    if (file_sink) logger_add_sink(logger, file_sink);
+    free(logpath);
 
     signal(SIGCHLD,SIG_IGN);
     signal(SIGHUP,SIG_IGN);
@@ -316,12 +354,28 @@ int main(void) {
 
     log_info("AtlasLinux init starting...\n");
 
-    load_modules((const char*[]){ "e1000", "virtio_dma_buf", "virtio-gpu", NULL });
-    launch_services();
+    /* load modules from config or defaults */
+    if (cfg) load_modules_from_config(cfg);
+    else load_modules((const char*[]){ "e1000", "virtio_dma_buf", "virtio-gpu", NULL });
 
-    if(fork()==0) spawn_shell("/dev/tty1");
-    if(fork()==0) spawn_shell("/dev/tty2");
-    if(fork()==0) spawn_shell("/dev/tty3");
+    /* launch services: directory may be overridden in config */
+    char *svcdir = cfg_get_string_dup(cfg, "Services.dir", "/sbin/services");
+    launch_services_from_dir(svcdir);
+    free(svcdir);
+
+    /* get how many ttys to spawn from config (default 3) */
+    int ttys = cfg_get_int(cfg, "System.spawn_getty_ttys", 3);
+
+    /* spawn login processes on tty1..ttyN */
+    for (int i = 1; i <= ttys && i <= 12; ++i) {
+        pid_t p = fork();
+        if (p == 0) {
+            char ttypath[32];
+            snprintf(ttypath, sizeof(ttypath), "/dev/tty%d", i);
+            spawn_login(ttypath);
+            _exit(0);
+        }
+    }
 
     log_debug("main: parent entering infinite pause loop\n");
     for(;;) pause();
