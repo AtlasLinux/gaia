@@ -244,7 +244,7 @@ static void load_modules_from_config(AclBlock *cfg) {
     char path[256];
     int found = 0;
     for (int i = 0; i < MAX_MODULES; ++i) {
-        snprintf(path, sizeof(path), "Modules.load[%d]", i);
+        snprintf(path, sizeof(path), "System.Modules.load[%d]", i);
         char *mod = NULL;
         if (!acl_get_string(cfg, path, &mod) || !mod) break;
         log_info("config: loading module '%s'\n", mod);
@@ -255,7 +255,7 @@ static void load_modules_from_config(AclBlock *cfg) {
     if (!found) {
         /* fallback to previous hard-coded list */
         const char *defaults[] = { "e1000", "virtio_dma_buf", "virtio-gpu", NULL };
-        log_info("config: no Modules.load[], falling back to defaults\n");
+        log_info("config: no System.Modules.load[], falling back to defaults\n");
         load_modules(defaults);
     }
 }
@@ -312,8 +312,8 @@ int main(void) {
         log_info("acl: /conf/system.acl not found or failed to parse, continuing with defaults\n");
     }
 
-    /* Logging path override (optional) */
-    char *logpath = cfg_get_string_dup(cfg, "Logging.path", "/log/init.log");
+    /* Log path override (optional) */
+    char *logpath = cfg_get_string_dup(cfg, "System.Log.path", "/log/init.log");
     LogSink* file_sink = file_sink_create(logpath);
     if (file_sink) logger_add_sink(logger, file_sink);
     free(logpath);
@@ -359,12 +359,12 @@ int main(void) {
     else load_modules((const char*[]){ "e1000", "virtio_dma_buf", "virtio-gpu", NULL });
 
     /* launch services: directory may be overridden in config */
-    char *svcdir = cfg_get_string_dup(cfg, "Services.dir", "/sbin/services");
+    char *svcdir = cfg_get_string_dup(cfg, "System.Services.dir", "/sbin/services");
     launch_services_from_dir(svcdir);
     free(svcdir);
 
     /* get how many ttys to spawn from config (default 3) */
-    int ttys = cfg_get_int(cfg, "System.spawn_getty_ttys", 3);
+    int ttys = cfg_get_int(cfg, "System.system.spawn_ttys", 3);
 
     /* spawn login processes on tty1..ttyN */
     for (int i = 1; i <= ttys && i <= 12; ++i) {
